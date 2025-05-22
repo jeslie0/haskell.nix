@@ -75,7 +75,9 @@ let
           buildable = true;
         } // lookupDependencies hsPkgs.pkgsBuildBuild (components.setup.depends or []) (components.setup.exe-depends or []);
       };
-  nixFilesDir = callProjectResults.projectNix + callProjectResults.src.origSubDir or "";
+  # We use unsafeDiscardStringContext to ensure that we don't query this derivation when importing
+  # each package. The cost can be very high when using a remote store, as we need to do a network call.
+  nixFilesDir = builtins.unsafeDiscardStringContext callProjectResults.projectNix.outPath + callProjectResults.src.origSubDir or "";
 in {
   # This replaces the `plan-nix/default.nix`
   pkgs = (hackage: {
@@ -100,7 +102,9 @@ in {
                     then import (nixFilesDir + "/cabal-files/${p.pkg-name}.nix")
                   else if builtins.pathExists (nixFilesDir + "/.plan.nix/${p.pkg-name}.nix")
                     then import (nixFilesDir + "/.plan.nix/${p.pkg-name}.nix")
-                  else (((hackage.${p.pkg-name}).${p.pkg-version}).revisions).default) (args // { hsPkgs = {}; });
+                  else
+                    # TODO make this an error?
+                    __trace "WARNING no `.nix` file for ${p.pkg-name} in ${nixFilesDir}." {}) (args // { hsPkgs = {}; });
               in pkgs.lib.optionalAttrs (p ? pkg-src-sha256) {
                 sha256 = p.pkg-src-sha256;
               } // pkgs.lib.optionalAttrs (p.pkg-src.type or "" == "source-repo") {
