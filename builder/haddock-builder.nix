@@ -109,6 +109,12 @@ let
 
       # If we don't have any source files, no need to run haddock
       [[ -n $(find . -name "*.hs" -o -name "*.lhs") ]] && {
+      # Run any preprocessor in the custom build step
+      $SETUP_HS build \
+        "--with-ghc=false" \
+        ${lib.optionalString (haskellLib.isTest componentId) "--tests"} \
+        ${lib.concatStringsSep " " setupHaddockFlags} || true
+
       $SETUP_HS haddock \
         "--html" \
         ${lib.optionalString (haskellLib.isTest componentId) "--tests"} \
@@ -151,8 +157,12 @@ let
           ${ghc.targetPrefix}ghc-pkg -v0 --package-db $configFiles/${configFiles.packageCfgDir} -f $out/package.conf.d register "$pkg"
         done
 
-        ln -s ${componentDrv}/exactDep $out/exactDep
-        ln -s ${componentDrv}/envDep $out/envDep
+        if [ -d ${componentDrv}/exactDep ]; then
+          ln -s ${componentDrv}/exactDep $out/exactDep
+        fi
+        if [ -f ${componentDrv}/envDep ]; then
+          ln -s ${componentDrv}/envDep $out/envDep
+        fi
       '';
   }
   // haskellLib.optionalHooks {
