@@ -14,7 +14,7 @@
 , cabalProjectLocal    ? null
 , cabalProjectFreeze   ? null
 , caller               ? "callCabalProjectToNix" # Name of the calling function for better warning messages
-, compilerSelection    ? p: builtins.mapAttrs (_: x: x.override { hadrianEvalPackages = evalPackages; }) p.haskell-nix.compiler
+, compilerSelection    ? p: builtins.mapAttrs (_: x: x.override { ghcEvalPackages = evalPackages; }) p.haskell-nix.compiler
 , ghcOverride   ? null # Used when we need to set ghc explicitly during bootstrapping
 , configureArgs ? "" # Extra arguments to pass to `cabal v2-configure`.
                      # `--enable-tests --enable-benchmarks` are included by default.
@@ -331,6 +331,8 @@ let
                 then "OSMinGW32"
               else if pkgs.stdenv.targetPlatform.isGhcjs
                 then "OSGhcjs"
+              else if pkgs.stdenv.targetPlatform.isWasi
+                then "OSWasi"
               else throw "Unknown target os ${pkgs.stdenv.targetPlatform.config}"
             }")'
           echo ',("target arch","${
@@ -348,6 +350,8 @@ let
                 then "ArchJavaScript"
               else if pkgs.stdenv.targetPlatform.is32bit
                 then "Arm32"
+              else if pkgs.stdenv.targetPlatform.isWasm
+                then "ArchWasm32"
               else throw "Unknown target arch ${pkgs.stdenv.targetPlatform.config}"
           }")'
           echo ',("target platform string","${platformString pkgs.stdenv.targetPlatform}")'
@@ -680,7 +684,9 @@ let
           # Setting the desired `index-state` here in case it is not
           # in the cabal.project file. This will further restrict the
           # packages used by the solver (cached-index-state >= index-state-max).
-          pkgs.lib.optionalString (index-state != null) "--index-state=${index-state}"
+          # Cabal treats `--index-state` > the last known package as an error,
+          # so we only include this if it is < cached-index-state.
+          pkgs.lib.optionalString (index-state != null && index-state < cached-index-state) "--index-state=${index-state}"
         } \
         -w ${
           # We are using `-w` rather than `--with-ghc` here to override

@@ -31,6 +31,10 @@
       url = "github:input-output-hk/hackage.nix/for-stackage";
       flake = false;
     };
+    hackage-internal = {
+      url = "github:input-output-hk/hackage.nix";
+      flake = false;
+    };
     stackage = {
       url = "github:input-output-hk/stackage.nix";
       flake = false;
@@ -49,13 +53,6 @@
     };
     cardano-shell = {
       url = "github:input-output-hk/cardano-shell";
-      flake = false;
-    };
-    "ghc-8.6.5-iohk" = {
-      type = "github";
-      owner = "input-output-hk";
-      repo = "ghc";
-      ref = "release/8.6.5-iohk";
       flake = false;
     };
     hpc-coveralls = {

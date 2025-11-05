@@ -437,8 +437,8 @@ final: prev: {
         # If you want to update this value it important to check the
         # materializations.  Turn `checkMaterialization` on below and
         # check the CI results before turning it off again.
-        internalHackageIndexState = "2024-10-17T00:00:00Z"; # Remember to also update ../nix-tools/cabal.project and ../nix-tools/flake.lock
-
+        internalHackageIndexState = builtins.head (builtins.attrNames (
+          import (sources.hackage-internal + "/index-state.nix")));
         checkMaterialization = false; # This is the default. Use an overlay to set it to true and test all the materialized files
 
         # Helps materialize the output of derivations
@@ -601,7 +601,13 @@ final: prev: {
         # Takes a haskell src directory runs cabal new-configure and plan-to-nix.
         # Resulting nix files are added to nix-plan subdirectory.
         callCabalProjectToNix = import ../lib/call-cabal-project-to-nix.nix {
-            index-state-hashes = import indexStateHashesPath;
+            index-state-hashes =
+              (
+                if builtins.pathExists (hackageSrc + "/index-state.nix")
+                  then import (hackageSrc + "/index-state.nix")
+                  else import (hackageSrc + "/index-state-hashes.nix")
+              )
+              // import (sources.hackage-internal + "/index-state.nix");
             inherit (final.buildPackages.haskell-nix) haskellLib;
             pkgs = final.buildPackages.pkgs;
             inherit (final.buildPackages.pkgs) cacert;
@@ -690,7 +696,7 @@ final: prev: {
                             then config.ghc
                           else
                             final.lib.mkDefault selectedCompiler;
-                        in if ghc.isHaskellNixCompiler or false then ghc.override { hadrianEvalPackages = evalPackages; } else ghc;
+                        in if ghc.isHaskellNixCompiler or false then ghc.override { ghcEvalPackages = evalPackages; } else ghc;
                       compiler.nix-name = final.lib.mkForce config.compiler-nix-name;
                       evalPackages = final.lib.mkDefault evalPackages;
                     } ];
@@ -832,18 +838,13 @@ final: prev: {
             shellFor' = crossPlatforms:
               let
                 shellArgs = builtins.removeAttrs rawProject.args.shell [ "crossPlatforms" ];
-                # These are the args we will pass to the shells for the corss compiler
-                argsCross =
-                  # These things should match main shell
-                  final.lib.filterAttrs (n: _: builtins.elem n [
-                    "packages" "components" "additional" "exactDeps" "packageSetupDeps"
-                  ]) shellArgs // {
-                    # The main shell's hoogle will probably be faster to build.
-                    withHoogle = false;
-                  };
                 # Shells for cross compilation
-                crossShells = builtins.map (project: project.shellFor' (_p: []) argsCross)
-                  (crossPlatforms projectCross);
+                crossShells = builtins.map (project: project.shellFor {
+                    # Prevent recursion
+                    crossPlatforms = final.lib.mkForce (_p: []);
+                    # The main shell's hoogle will probably be faster to build.
+                    withHoogle = final.lib.mkForce false;
+                  }) (crossPlatforms projectCross);
               in rawProject.hsPkgs.shellFor (shellArgs // {
                   # Add inputs from the cross compilation shells
                   inputsFrom = shellArgs.inputsFrom or [] ++ crossShells;
@@ -946,7 +947,7 @@ final: prev: {
                   modules = [ { _module.args.buildModules = final.lib.mkForce buildProject.pkg-set; }
                       (mkCacheModule cache) ]
                     ++ (config.modules or [])
-                    ++ final.lib.optional (config.ghc != null) { ghc.package = config.ghc.override { hadrianEvalPackages = evalPackages; }; }
+                    ++ final.lib.optional (config.ghc != null) { ghc.package = config.ghc.override { ghcEvalPackages = evalPackages; }; }
                     ++ final.lib.optional (config.compiler-nix-name != null)
                         { compiler.nix-name = final.lib.mkForce config.compiler-nix-name; }
                     ++ [ { evalPackages = final.lib.mkDefault evalPackages; } ];
@@ -1150,9 +1151,9 @@ final: prev: {
 
         roots' = { compiler-nix-name, evalPackages ? final.pkgsBuildBuild }: ifdLevel:
           let
-            ghc = final.buildPackages.haskell-nix.compiler.${compiler-nix-name}.override { hadrianEvalPackages = evalPackages; };
+            ghc = final.buildPackages.haskell-nix.compiler.${compiler-nix-name}.override { ghcEvalPackages = evalPackages; };
           in
-          	final.recurseIntoAttrs ({
+            final.recurseIntoAttrs ({
             # Things that require no IFD to build
             source-pin-hackage = hackageSrc;
             source-pin-stackage = stackageSrc;
@@ -1177,7 +1178,8 @@ final: prev: {
             # GHCJS builds its own template haskell runner.
             # These seem to be the only things we use from `ghc-extra-packages`
             # in haskell.nix itself.
-            && !final.stdenv.hostPlatform.isGhcjs)
+            && !final.stdenv.hostPlatform.isGhcjs
+            && !final.stdenv.hostPlatform.isWasm)
               final.haskell-nix.iserv-proxy-exes.${compiler-nix-name});
     };
 }

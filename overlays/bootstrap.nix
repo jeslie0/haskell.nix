@@ -1,7 +1,8 @@
 final: prev:
 let
     buildBootstrapper.compilerNixName =
-      if final.buildPackages.haskell.compiler ? ghc964 then "ghc964"
+      if final.buildPackages.haskell.compiler ? ghc967 then "ghc967"
+      else if final.buildPackages.haskell.compiler ? ghc964 then "ghc964"
       else "ghc8107";
     latestVerMap = {
       "8.10" = "8.10.7";
@@ -28,10 +29,10 @@ let
           (builtins.attrNames latestVerMap));
     traceWarnOld = v: x:
       let
-        bootstrapGhc = final.buildPackages.haskell.compiler.ghc8107;
+        oldVersion = "9.6";
       in
-      if builtins.compareVersions x.version bootstrapGhc.version < 0 then
-          throw "Desired GHC (${x.version}) is older than the bootstrap GHC (${bootstrapGhc.version}) for this platform (${final.stdenv.targetPlatform.config})."
+      if builtins.compareVersions x.version oldVersion < 0 then
+          throw "Desired GHC (${x.version}) is older than the oldest GHC haskell.nix might work with (GHC ${oldVersion})."
       else x // final.lib.optionalAttrs (x.version != latestVerMap.${v}) { latestVersion = latestVerMap.${v}; };
     errorOldGhcjs = v: up: throw "ghcjs ${v} is no longer supported by haskell.nix. Consider using ${latestVerMap.${up}}";
 in {
@@ -50,7 +51,8 @@ in {
             };
             # ghc 9.0.2 is no longer cached for nixpkgs-unstable and it seems to be broken
             nixpkgsBootCompiler =
-              if final.buildPackages.haskell.compiler ? ghc964 then "ghc964"
+              if final.buildPackages.haskell.compiler ? ghc967 then "ghc967"
+              else if final.buildPackages.haskell.compiler ? ghc964 then "ghc964"
               else "ghc902";
             bootPkgsGhc94 = bootPkgs // {
                 alex = final.buildPackages.haskell-nix.tool nixpkgsBootCompiler "alex" {
@@ -77,7 +79,7 @@ in {
                 from = start: final.lib.optional (versionAtLeast start);
                 until = end: final.lib.optional (versionLessThan end);
                 always = final.lib.optional true;
-                onDarwin = final.lib.optionals final.stdenv.targetPlatform.isDarwin; 
+                onDarwin = final.lib.optionals final.stdenv.targetPlatform.isDarwin;
                 onMusl = final.lib.optionals final.stdenv.targetPlatform.isMusl;
                 onWindows = final.lib.optionals final.stdenv.targetPlatform.isWindows;
                 onWindowsOrMusl = final.lib.optionals (final.stdenv.targetPlatform.isWindows || final.stdenv.targetPlatform.isMusl);
@@ -88,6 +90,7 @@ in {
                 onNative = final.lib.optionals (final.stdenv.buildPlatform == final.stdenv.targetPlatform);
                 onCross = final.lib.optionals (final.stdenv.targetPlatform != final.stdenv.hostPlatform);
                 onGhcjs = final.lib.optionals final.stdenv.targetPlatform.isGhcjs;
+                onWasm = final.lib.optionals final.stdenv.targetPlatform.isWasm;
                 on32bit = final.lib.optionals final.stdenv.targetPlatform.is32bit;
                 # Try to avoid reordering the patches unless a patch is added or changed that
                 # will be applied to most versions of the GHC anyway (reordering the patches
@@ -230,8 +233,9 @@ in {
                 # This one will lead to segv's on darwin, when calling `strlen` during lookupStrHashTable. `strlen` ends up being called with 0x0.
                 # This patch will allow adding additional symbols to iserv, instead of having to patch them into GHC all the time.
                 ++ final.lib.optionals (
-                        (final.stdenv.targetPlatform.isAndroid || final.stdenv.targetPlatform.isLinux)
-                     && (final.stdenv.targetPlatform.isAarch64 || final.stdenv.targetPlatform.is32bit))
+                     final.stdenv.targetPlatform.isWindows ||
+                     (  (final.stdenv.targetPlatform.isAndroid || final.stdenv.targetPlatform.isLinux)
+                     && (final.stdenv.targetPlatform.isAarch64 || final.stdenv.targetPlatform.is32bit)))
                   (fromUntil "9.6.1" "9.11" ./patches/ghc/iserv-syms.patch)
                 ++ onAndroid (until "9.0" ./patches/ghc/ghc-8.10.7-weak-symbols-2.patch)
                 ++ onDarwin (onAarch64 (until "9.0" ./patches/ghc/ghc-8.10.7-rts-aarch64-darwin.patch))
@@ -331,9 +335,17 @@ in {
 
                 ++ onAndroid (from      "9.6"          ./patches/ghc/ghc-9.6-COMPAT_R_ARM_PREL31.patch)
                 ++ onAndroid (from      "9.10"         ./patches/ghc/ghc-9.10-ignore-libc.patch)
+                # unbreak modern clang with proper _atomic declarations.
+                ++ onAndroid (fromUntil "9.6"  "9.6.5" ./patches/ghc/7db8c9927fae3369fc4ecff68f80c4cb32eea757.patch)
 
+                ++ onGhcjs (from        "9.12"         ./patches/ghc/ghc-9.12-ghcjs-rts-mem-heap8.patch)
                 # Fix for `fatal error: 'rts/Types.h' file not found` when building `primitive`
                 ++ onGhcjs (from        "9.13"         ./patches/ghc/ghc-9.13-ghcjs-rts-types.patch)
+
+                ++ onGhcjs (fromUntil   "9.6.7" "9.7"  ./patches/ghc/ghc-9.6-js-support-this-unit-id-10819.patch)
+
+                ++ onWasm (until                "9.13" ./patches/ghc/ghc-9.12-wasm-shared-libs.patch)
+                ++ onWasm (until                "9.13" ./patches/ghc/ghc-9.12-wasm-keep-cafs.patch)
                 ;
         in ({
             ghc8107 = traceWarnOld "8.10" (final.callPackage ../compiler/ghc {
@@ -1072,8 +1084,8 @@ in {
                 };
                 inherit sphinx;
 
-                buildLlvmPackages = final.buildPackages.llvmPackages_15;
-                llvmPackages = final.llvmPackages_15;
+                buildLlvmPackages = final.buildPackages.llvmPackages_19;
+                llvmPackages = final.llvmPackages_19;
 
                 src-spec.file = final.haskell-nix.sources.ghc9122;
                 src-spec.version = "9.12.2";
@@ -1094,8 +1106,9 @@ in {
 
                 bootPkgs = bootPkgsGhc94 // {
                   ghc = if final.stdenv.buildPlatform != final.stdenv.targetPlatform
-                    then final.buildPackages.buildPackages.haskell-nix.compiler.ghc9121
-                    else final.buildPackages.buildPackages.haskell.compiler.ghc9121
+                    then final.buildPackages.buildPackages.haskell-nix.compiler.${compiler-nix-name}
+                    else final.buildPackages.buildPackages.haskell.compiler.ghc9122
+                          or final.buildPackages.buildPackages.haskell.compiler.ghc9121
                           or final.buildPackages.buildPackages.haskell.compiler.ghc9101
                           or final.buildPackages.buildPackages.haskell.compiler.ghc984
                           or final.buildPackages.buildPackages.haskell.compiler.ghc983
@@ -1112,8 +1125,8 @@ in {
                 };
                 inherit sphinx;
 
-                buildLlvmPackages = final.buildPackages.llvmPackages_15;
-                llvmPackages = final.llvmPackages_15;
+                buildLlvmPackages = final.buildPackages.llvmPackages_19;
+                llvmPackages = final.llvmPackages_19;
 
                 src-spec.file = src;
                 src-spec.version = version;

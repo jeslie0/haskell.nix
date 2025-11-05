@@ -1,9 +1,9 @@
-{ stdenv, lib, haskellLib, buildPackages }:
+{ stdenv, lib, haskellLib, pkgsBuildBuild }:
 let self = drvOrig:
 
 let
   # Work around problem running dynamicially linked Android executables with qemu.
-  drv = drvOrig.override (lib.optionalAttrs stdenv.hostPlatform.isAndroid { setupBuildFlags = ["--ghc-option=-optl-static" ]; });
+  drv = drvOrig.override (oldAttrs: lib.optionalAttrs stdenv.hostPlatform.isAndroid { setupBuildFlags = (oldAttrs.setupBuildFlags or []) ++ ["--ghc-option=-optl-static"]; });
 
   component = drv.config;
 
@@ -30,16 +30,17 @@ in stdenv.mkDerivation ((
   name = (drv.name + "-check");
 
   passthru = {
-    inherit (drv) identifier config configFiles executableToolDepends cleanSrc env exeName;
+    inherit (drv) identifier config configFiles executableToolDepends cleanSrc env exeName meta;
     profiled = self drv.profiled;
     dwarf = self drv.dwarf;
   };
 
-  inherit (drv) meta LANG LC_ALL buildInputs;
+  inherit (drv) LANG LC_ALL buildInputs;
+  meta = builtins.removeAttrs drv.meta ["mainProgram"];
 
   nativeBuildInputs = drv.nativeBuildInputs
-    ++ [buildPackages.xorg.lndir]
-    ++ lib.optional (stdenv.hostPlatform.isGhcjs) buildPackages.nodejs;
+    ++ [pkgsBuildBuild.xorg.lndir]
+    ++ lib.optional (stdenv.hostPlatform.isGhcjs) pkgsBuildBuild.nodejs;
 
   inherit (component) doCheck doCrossCheck;
 

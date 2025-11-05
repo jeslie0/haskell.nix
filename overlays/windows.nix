@@ -37,26 +37,32 @@ final: prev:
      configureFlags = (drv.configureFlags or []) ++ [ "--enable-static --disable-shared" ];
    });
 
-   haskell-nix = prev.haskell-nix // ({
+   haskell-nix = prev.haskell-nix // final.lib.optionalAttrs final.stdenv.hostPlatform.isWindows ({
+     templateHaskell = builtins.mapAttrs (_compiler-nix-name: iserv-proxy-exes:
+        import ./mingw_w64.nix {
+          inherit (final.stdenv) hostPlatform;
+          inherit (final.pkgsBuildBuild) lib writeShellScriptBin;
+          wine = final.pkgsBuildBuild.winePackages.minimal;
+          inherit (final.windows) mingw_w64_pthreads;
+          inherit (final) gmp;
+          inherit (final.pkgsBuildBuild) symlinkJoin;
+          # iserv-proxy needs to come from the buildPackages, as it needs to run on the
+          # build host.
+          inherit (iserv-proxy-exes) iserv-proxy iserv-proxy-interpreter iserv-proxy-interpreter-prof;
+        }) final.haskell-nix.iserv-proxy-exes;
      defaultModules = prev.haskell-nix.defaultModules ++ [
       ({ pkgs, buildModules, config, lib, ... }:
       let
-        withTH = import ./mingw_w64.nix {
-          inherit (pkgs.stdenv) hostPlatform;
-          inherit (pkgs.pkgsBuildBuild) lib writeShellScriptBin;
-          wine = pkgs.pkgsBuildBuild.winePackages.minimal;
-          inherit (pkgs.windows) mingw_w64_pthreads;
-          inherit (pkgs) gmp;
-          inherit (pkgs.pkgsBuildBuild) symlinkJoin;
-          # iserv-proxy needs to come from the buildPackages, as it needs to run on the
-          # build host.
-          inherit (final.haskell-nix.iserv-proxy-exes.${config.compiler.nix-name}) iserv-proxy iserv-proxy-interpreter iserv-proxy-interpreter-prof;
-        } // {
-          # we can perform testing of cross compiled test-suites by using wine.
-          # Therefore let's enable doCrossCheck here!
-          doCrossCheck = pkgs.stdenv.hostPlatform.isWindows;
-        };
+        withTH = final.haskell-nix.templateHaskell.${config.compiler.nix-name};
       in prev.haskell-nix.haskellLib.addPackageKeys {
+        inherit (withTH) configureFlags testWrapper;
+
+        setupBuildFlags = map (opt: "--ghc-option=" + opt) withTH.ghcOptions;
+
+        # we can perform testing of cross compiled test-suites by using wine.
+        # Therefore let's enable doCrossCheck here!
+        doCrossCheck = pkgs.stdenv.hostPlatform.isWindows;
+        
         packages = {
 
           # Apply https://github.com/haskell/cabal/pull/6055
@@ -81,7 +87,7 @@ final: prev:
           # http-client.patches        = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isWindows [ ({ version }: if version == "0.5.14" then ./patches/http-client-0.5.14.patch else null) ];
 
           conduit.patches            = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isWindows [ ({ version }: if builtins.compareVersions version "1.3.1.1" < 0 then ./patches/conduit-1.3.0.2.patch else null) ];
-          streaming-commons.patches  = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isWindows [ ./patches/streaming-commons-0.2.0.0.patch ];
+          streaming-commons.patches  = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isWindows [ ({ version }: if builtins.compareVersions version "0.2.3.1" < 0 then ./patches/streaming-commons-0.2.0.0.patch else null) ];
           x509-system.patches        = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isWindows [ ./patches/x509-system-1.6.6.patch ];
           crypton-x509-system.patches = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isWindows [ ./patches/crypton-x509-system.patch ];
 
@@ -115,7 +121,7 @@ final: prev:
           unix-time.components.library.libs = [ pkgs.windows.mingw_w64_pthreads ];
           unix-time.postUnpack = "substituteInPlace */cbits/win_patch.h --replace Windows.h windows.h";
         };
-      } // withTH
+      }
       )
     ];
   });

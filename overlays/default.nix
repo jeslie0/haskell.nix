@@ -45,6 +45,10 @@ let
             tarball // { exes = final.lib.genAttrs nix-tools-provided-exes (_: tarball); };
 
         static-nix-tools = static-nix-tools' ../nix-tools-static.nix;
+        # Any change to default-setup requires rebuilding everthing.
+        # Having a dedicated file for `default-setup` allows us to update
+        # the other `nix-tools` (like `make-install-plan`), without a
+        # full rebuild.
         static-nix-tools-for-default-setup = static-nix-tools' ../nix-tools-static-for-default-setup.nix;
 
         # Version of nix-tools built with a pinned version of haskell.nix.
@@ -92,6 +96,7 @@ let
     cacheCompilerDeps = import ./cache-compiler-deps.nix;
     lazy-inputs = import ../lazy-inputs;
     rcodesign = import ./rcodesign.nix;
+    wasm = import ./wasm.nix;
   };
 
   composeExtensions = f: g: final: prev:
@@ -126,6 +131,7 @@ let
     cabalPkgConfig
     gobject-introspection
     hix
+    wasm
     # Restore nixpkgs haskell and haskellPackages
     (_: prev: { inherit (prev.haskell-nix-prev) haskell haskellPackages; })
     cacheCompilerDeps

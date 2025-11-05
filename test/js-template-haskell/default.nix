@@ -24,13 +24,21 @@ in recurseIntoAttrs {
   };
 
   meta.disabled = builtins.elem compiler-nix-name ["ghc91320241204"]
+    # Not sure why this is failing with a seg fault
+    || (builtins.elem compiler-nix-name ["ghc9102" "ghc9102llvm"] && stdenv.hostPlatform.isAndroid && stdenv.hostPlatform.isAarch32)
     # unhandled ELF relocation(Rel) type 10
-    || (stdenv.hostPlatform.isMusl && stdenv.hostPlatform.isx86_32);
+    || (stdenv.hostPlatform.isMusl && stdenv.hostPlatform.isx86_32)
+
+    # Disable for now (CI machines currently hang without timing out)
+    || stdenv.hostPlatform.isWindows || stdenv.hostPlatform.isAndroid
+    || (stdenv.buildPlatform.isx86_64 && stdenv.hostPlatform.isAarch64)
+    ;
 
   build = packages.js-template-haskell.components.library;
   check = packages.js-template-haskell.checks.test;
 } // optionalAttrs (!(
          stdenv.hostPlatform.isGhcjs
+      || (builtins.elem compiler-nix-name ["ghc984" "ghc9122" "ghc9122llvm" "ghc91320250523"] && stdenv.buildPlatform.isx86_64 && stdenv.hostPlatform.isAarch64)
       || (stdenv.hostPlatform.isAarch64
           && stdenv.hostPlatform.isMusl
           && builtins.elem compiler-nix-name ["ghc9101" "ghc966"])

@@ -1,6 +1,4 @@
-{ pkgs, stdenv, buildPackages, pkgsBuildBuild, ghc, lib, gobject-introspection ? null, haskellLib, makeConfigFiles, haddockBuilder, ghcForComponent, hsPkgs, compiler, runCommand, libffi, gmp, windows, zlib, ncurses, nodejs, nonReinstallablePkgs }@defaults:
-lib.makeOverridable (
-let self =
+{ pkgs, stdenv, buildPackages, pkgsBuildBuild, ghc, llvmPackages, lib, gobject-introspection ? null, haskellLib, makeConfigFiles, haddockBuilder, ghcForComponent, hsPkgs, compiler, runCommand, libffi, gmp, windows, zlib, ncurses, nodejs, nonReinstallablePkgs }@defaults:
 { componentId
 , component
 , package
@@ -43,7 +41,7 @@ let self =
 , hardeningDisable ? component.hardeningDisable
 
 , enableStatic ? component.enableStatic
-, enableShared ? ghc.enableShared && component.enableShared && !haskellLib.isCrossHost
+, enableShared ? ghc.enableShared && component.enableShared && (!haskellLib.isCrossHost || stdenv.hostPlatform.isWasm)
 , enableExecutableDynamic ? component.enableExecutableDynamic && !stdenv.hostPlatform.isMusl
 , enableDeadCodeElimination ? component.enableDeadCodeElimination
 , writeHieFiles ? component.writeHieFiles
@@ -92,7 +90,76 @@ let self =
 # LLVM
 , useLLVM ? ghc.useLLVM or false
 , smallAddressSpace ? false
-
+}:
+# makeOverridable is called here after all the `? DEFAULT` arguments
+# will have been applied.  This makes sure that `c.override (oldAttrs: {...})`
+# includes these `DEFAULT` values in `oldAttrs`.  This is important
+# so that overrides can modify the existing values instead of replacing them.
+lib.makeOverridable (
+let self =
+{ componentId
+, component
+, package
+, name
+, setup
+, src
+, flags
+, cabalFile
+, cabal-generator
+, patches
+, preUnpack
+, configureFlags
+, prePatch
+, postPatch
+, preConfigure
+, postConfigure
+, setupBuildFlags
+, preBuild
+, postBuild
+, preCheck
+, postCheck
+, setupInstallFlags
+, preInstall
+, postInstall
+, preHaddock
+, postHaddock
+, shellHook
+, configureAllComponents
+, allComponent
+, build-tools
+, pkgconfig
+, platforms
+, frameworks
+, dontPatchELF
+, dontStrip
+, dontUpdateAutotoolsGnuConfigScripts
+, hardeningDisable
+, enableStatic
+, enableShared
+, enableExecutableDynamic
+, enableDeadCodeElimination
+, writeHieFiles
+, ghcOptions
+, contentAddressed
+, doHaddock
+, doHoogle
+, hyperlinkSource
+, quickjump
+, keepConfigFiles
+, keepGhc
+, keepSource
+, setupHaddockFlags
+, enableLibraryProfiling
+, enableProfiling
+, profilingDetail
+, doCoverage
+, enableSeparateDataOutput
+, enableLibraryForGhci
+, enableDebugRTS
+, enableDWARF
+, enableTSanRTS
+, useLLVM
+, smallAddressSpace
 }@drvArgs:
 
 let
@@ -217,7 +284,7 @@ let
       # lld -r --whole-archive ... will _not_ drop lazy symbols. However the
       # --whole-archive flag needs to come _before_ the objects, it's applied in
       # sequence. The proper fix is thusly to add --while-archive to Cabal.
-      (enableFeature (enableLibraryForGhci && !stdenv.hostPlatform.isGhcjs && !stdenv.hostPlatform.isAndroid) "library-for-ghci")
+      (enableFeature (enableLibraryForGhci && !stdenv.hostPlatform.isGhcjs && !stdenv.hostPlatform.isWasm && !stdenv.hostPlatform.isAndroid) "library-for-ghci")
     ] ++ lib.optionals (stdenv.hostPlatform.isMusl && (haskellLib.isExecutableType componentId)) [
       # These flags will make sure the resulting executable is statically linked.
       # If it uses other libraries it may be necessary for to add more
@@ -281,8 +348,11 @@ let
                      if builtins.isFunction shellHook then shellHook { inherit package shellWrappers; }
                      else abort "shellHook should be a string or a function";
 
-  exeExt = if stdenv.hostPlatform.isGhcjs && builtins.compareVersions defaults.ghc.version "9.8" < 0
-    then ".jsexe/all.js"
+  exeExt =
+    if stdenv.hostPlatform.isWasm
+      then ".wasm"
+    else if stdenv.hostPlatform.isGhcjs && builtins.compareVersions defaults.ghc.version "9.8" < 0
+      then ".jsexe/all.js"
     else stdenv.hostPlatform.extensions.executable;
   exeName = componentId.cname + exeExt;
   testExecutable = "dist/build/${componentId.cname}/${exeName}";
@@ -338,7 +408,7 @@ let
     }
     // lib.optionalAttrs stdenv.hostPlatform.isMusl {
       # This fixes musl compilation of TH code that depends on C++ (for instance TH code that uses the double-conversion package)
-      LD_LIBRARY_PATH="${pkgs.buildPackages.gcc-unwrapped.lib}/x86_64-unknown-linux-musl/lib";
+      LD_LIBRARY_PATH="${pkgs.buildPackages.gcc-unwrapped.lib}/${stdenv.hostPlatform.config}/lib";
     }
     // lib.optionalAttrs dontUpdateAutotoolsGnuConfigScripts {
       inherit dontUpdateAutotoolsGnuConfigScripts;
@@ -382,7 +452,6 @@ let
       env = shellWrappers.drv;
       shell = drv.overrideAttrs (attrs: {
         pname = nameOnly + "-shell";
-        inherit (package.identifier) version;
         nativeBuildInputs = [shellWrappers.drv] ++ attrs.nativeBuildInputs;
       });
       profiled = lib.makeOverridable self (drvArgs // { enableLibraryProfiling = true; });
@@ -430,7 +499,8 @@ let
     nativeBuildInputs =
       [ghc buildPackages.removeReferencesTo]
       ++ executableToolDepends
-      ++ (lib.optional stdenv.hostPlatform.isGhcjs buildPackages.nodejs);
+      ++ (lib.optional stdenv.hostPlatform.isGhcjs pkgsBuildBuild.nodejs)
+      ++ (lib.optional (ghc.useLdLld or false) llvmPackages.bintools);
 
     outputs = ["out"]
       ++ (lib.optional keepConfigFiles "configFiles")
@@ -652,6 +722,10 @@ let
         mkdir -p $out/share
         if [ -d dist/build/extra-compilation-artifacts ]; then
           cp -r dist/build/extra-compilation-artifacts/hpc $out/share
+        elif [ -d ${testExecutable}-tmp/extra-compilation-artifacts ]; then
+          cp -r ${testExecutable}-tmp/extra-compilation-artifacts/hpc $out/share
+        elif [ -d dist/build/${componentId.cname}/extra-compilation-artifacts ]; then
+          cp -r dist/build/${componentId.cname}/extra-compilation-artifacts/hpc $out/share
         else
           cp -r dist/hpc $out/share
         fi
@@ -715,4 +789,68 @@ let
   // lib.optionalAttrs (hardeningDisable != [] || stdenv.hostPlatform.isMusl) {
     hardeningDisable = hardeningDisable ++ lib.optional stdenv.hostPlatform.isMusl "pie";
   });
-in drv; in self)
+in drv; in self) {
+  inherit componentId
+          component
+          package
+          name
+          setup
+          src
+          flags
+          cabalFile
+          cabal-generator
+          patches
+          preUnpack
+          configureFlags
+          prePatch
+          postPatch
+          preConfigure
+          postConfigure
+          setupBuildFlags
+          preBuild
+          postBuild
+          preCheck
+          postCheck
+          setupInstallFlags
+          preInstall
+          postInstall
+          preHaddock
+          postHaddock
+          shellHook
+          configureAllComponents
+          allComponent
+          build-tools
+          pkgconfig
+          platforms
+          frameworks
+          dontPatchELF
+          dontStrip
+          dontUpdateAutotoolsGnuConfigScripts
+          hardeningDisable
+          enableStatic
+          enableShared
+          enableExecutableDynamic
+          enableDeadCodeElimination
+          writeHieFiles
+          ghcOptions
+          contentAddressed
+          doHaddock
+          doHoogle
+          hyperlinkSource
+          quickjump
+          keepConfigFiles
+          keepGhc
+          keepSource
+          setupHaddockFlags
+          enableLibraryProfiling
+          enableProfiling
+          profilingDetail
+          doCoverage
+          enableSeparateDataOutput
+          enableLibraryForGhci
+          enableDebugRTS
+          enableDWARF
+          enableTSanRTS
+          useLLVM
+          smallAddressSpace;
+}
